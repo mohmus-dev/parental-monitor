@@ -11,6 +11,10 @@ bin/
 .env.local
 *.db
 *.log
+.txt
+
+# Secrets / credentials
+secrets/
 
 # IDE
 .vscode/
