@@ -3,10 +3,14 @@ package models
 import "time"
 
 type Parent struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Email     string    `json:"email"`
-	CreatedAt time.Time `json:"created_at"`
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Email        string    `json:"email"`
+	PasswordHash string    `json:"-"`
+	AppName      string    `json:"app_name,omitempty"`
+	Platform     string    `json:"platform,omitempty"`
+	DeviceID     string    `json:"device_id,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 type Child struct {
@@ -14,6 +18,9 @@ type Child struct {
 	ParentID  string    `json:"parent_id"`
 	Name      string    `json:"name"`
 	Age       int       `json:"age,omitempty"`
+	DeviceID  string    `json:"device_id,omitempty"`
+	AppName   string    `json:"app_name,omitempty"`
+	Platform  string    `json:"platform,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 

@@ -1,0 +1,176 @@
+{
+  "info": {
+    "name": "Parental Monitor API",
+    "description": "Routes for login, parent self-service, and parent child management using JWT in the auth_token cookie.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/health",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["health"]
+        }
+      }
+    },
+    {
+      "name": "Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"john@example.com\",\n  \"password\": \"Secret123!\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/api/v1/auth/login",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "v1", "auth", "login"]
+        }
+      }
+    },
+    {
+      "name": "Logout",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/api/v1/auth/logout",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "v1", "auth", "logout"]
+        }
+      }
+    },
+    {
+      "name": "Register Parent",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"John Smith\",\n  \"email\": \"john@example.com\",\n  \"password\": \"Secret123!\",\n  \"app_name\": \"Parent App\",\n  \"platform\": \"windows\",\n  \"device_id\": \"parent-device-001\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/api/v1/parents/register",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "v1", "parents", "register"]
+        }
+      }
+    },
+    {
+      "name": "Get Current Parent",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/api/v1/parents/me",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "v1", "parents", "me"]
+        },
+        "description": "Requires auth_token cookie from login response."
+      }
+    },
+    {
+      "name": "Delete Current Parent",
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/api/v1/parents/me",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "v1", "parents", "me"]
+        },
+        "description": "Deletes the logged-in parent and associated children. Requires auth_token cookie."
+      }
+    },
+    {
+      "name": "List Parent Children",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/api/v1/parents/me/children",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "v1", "parents", "me", "children"]
+        },
+        "description": "Requires auth_token cookie. Returns all children for the logged-in parent."
+      }
+    },
+    {
+      "name": "Create Child",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Emma\",\n  \"age\": 10,\n  \"device_id\": \"child-device-001\",\n  \"app_name\": \"Child App\",\n  \"platform\": \"android\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/api/v1/parents/me/children",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "v1", "parents", "me", "children"]
+        },
+        "description": "Creates a child for the logged-in parent. Requires auth_token cookie."
+      }
+    },
+    {
+      "name": "Delete Selected Children",
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"child_ids\": [\"child-1\", \"child-2\"]\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/api/v1/parents/me/children",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "v1", "parents", "me", "children"]
+        },
+        "description": "Deletes selected child records for the logged-in parent. Requires auth_token cookie."
+      }
+    }
+  ]
+}

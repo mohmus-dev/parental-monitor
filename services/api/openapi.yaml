@@ -1,0 +1,65 @@
+openapi: 3.0.3
+info:
+  title: Parental Monitor API
+  version: 1.0.0
+  description: Parent registration and monitoring event endpoints.
+servers:
+  - url: http://localhost:8080
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              example:
+                status: ok
+                time: '2026-10-02T19:00:00Z'
+
+  /api/v1/parents/register:
+    post:
+      summary: Register a parent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - email
+              properties:
+                name:
+                  type: string
+                  example: John Smith
+                email:
+                  type: string
+                  format: email
+                  example: john@example.com
+                app_name:
+                  type: string
+                  example: Parent App
+                platform:
+                  type: string
+                  example: windows
+                device_id:
+                  type: string
+                  example: parent-device-001
+      responses:
+        '201':
+          description: Parent created
+          content:
+            application/json:
+              example:
+                parent:
+                  id: 8f5d4ed2-1b1e-4b6f-8f4e-921648c0e9b3
+                  name: John Smith
+                  email: john@example.com
+                  created_at: '2026-10-02T19:00:00Z'
+                message: parent registered successfully
+        '400':
+          description: Invalid request body
+        '409':
+          description: Parent already exists for this email
