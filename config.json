@@ -1,0 +1,80 @@
+{
+  "server_url": "http://localhost:8080",
+  "api_key": "dev_123456",
+  "device_name": "Child's Laptop",
+  "monitor_interval_ms": 50,
+  "batch_size": 10,
+  "flush_interval_sec": 5,
+  "scan_keywords": [
+    "porn", "pornography", "xxx", "adult", "onlyfans", "nude", "naked",
+    "sex", "sexual", "erotic", "escort", "gambling", "casino", "betting",
+    "drugs", "cocaine", "heroin", "meth", "marijuana", "weed", "cannabis",
+    "alcohol", "liquor", "vodka", "whiskey", "tobacco", "cigarette", "vape",
+    "violence", "gore", "blood", "weapon", "gun", "firearm", "knife", "bomb",
+    "suicide", "self-harm", "anorexia", "bulimia", "hacking", "cheat codes",
+    "piracy", "torrent", "cracked software", "dark web", "deep web"
+  ],
+  "scan_keyword_groups": {
+    "adult_content": [
+      "porn", "pornography", "xxx", "adult content", "adult video", "adult film",
+      "explicit content", "sexual content", "erotic", "erotic content", "nude",
+      "nude photos", "naked", "naked pictures", "onlyfans", "sex", "sexy",
+      "hardcore", "hentai", "cam girl", "webcam model", "milf", "teen porn",
+      "incest", "bdsm", "fetish", "orgy", "blowjob", "handjob", "masturbation",
+      "sex tape", "leaked video", "private video"
+    ],
+    "adult_services": [
+      "escort", "escort service", "strip club", "adult club", "massage parlor",
+      "brothel", "prostitute", "prostitution", "call girl", "sex shop",
+      "adult toys", "dating for adults", "swingers club"
+    ],
+    "alcohol": [
+      "alcohol", "liquor", "buy alcohol", "drinking game", "vodka", "whiskey",
+      "rum", "gin", "tequila", "beer", "wine", "cocktail recipes", "get drunk",
+      "binge drinking", "alcohol delivery", "buy beer online"
+    ],
+    "drugs": [
+      "drug", "drugs", "buy drugs", "morphine", "opioid", "opioids", "oxycontin",
+      "cocaine", "crack", "heroin", "marijuana", "weed", "cannabis", "pot",
+      "methamphetamine", "meth", "fentanyl", "lsd", "ecstasy", "mdma", "shrooms",
+      "mushrooms", "painkillers", "xanax", "adderall", "steroids", "doping",
+      "drug dealer", "buy pills online", "synthetic drugs", "bath salts"
+    ],
+    "gambling": [
+      "gambling", "casino", "online casino", "sports betting", "online betting",
+      "poker for money", "slot machine", "blackjack", "roulette", "lottery",
+      "bet online", "betting sites", "horse racing bet", "crypto gambling",
+      "betting app", "casino bonus", "gamble online"
+    ],
+    "nicotine": [
+      "tobacco", "cigarette", "cigarettes", "vape", "vaping", "e-cigarette",
+      "juul", "nicotine", "buy cigarettes", "cigar", "hookah", "smoking",
+      "zyn", "nicotine pouch", "chewing tobacco"
+    ],
+    "violence": [
+      "beaten", "violence", "fight", "fighting", "blood", "gore", "murder",
+      "kill", "killing", "torture", "assault", "attack", "violent video",
+      "fight club", "street fight", "knife attack"
+    ],
+    "weapons": [
+      "weapon", "weapons", "firearm", "firearms", "gun", "guns", "ammo",
+      "ammunition", "pistol", "rifle", "shotgun", "assault rifle", "knife",
+      "switchblade", "bomb", "explosive", "grenade", "buy gun", "gun parts",
+      "3d printed gun", "silencer", "bullet"
+    ],
+    "dangerous": [
+      "suicide", "how to suicide", "self-harm", "cutting myself", "anorexia",
+      "bulimia", "eating disorder", "depression help", "kill myself",
+      "don't want to live", "self injury"
+    ],
+    "cybercrime": [
+      "hacking", "hacker", "hack account", "cheat codes", "game cheats",
+      "piracy", "torrent", "cracked software", "keygen", "dark web",
+      "deep web", "stolen passwords", "credit card fraud", "carding",
+      "phishing", "malware download", "virus maker", "crack password"
+    ]
+  },
+  "custom_keywords": [],
+  "custom_keyword_groups": {},
+  "log_level": "info"
+}

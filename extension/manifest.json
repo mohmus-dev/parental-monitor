@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Parental Monitor Search Reporter",
+  "version": "1.0.0",
+  "description": "Reports submitted search queries to the local Parental Monitor app.",
+  "permissions": ["webNavigation", "tabs"],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "https://*.google.com/*",
+    "https://*.google.co.uk/*",
+    "https://*.google.ca/*",
+    "https://*.google.com.au/*",
+    "https://*.google.co.in/*",
+    "https://*.bing.com/*",
+    "https://*.duckduckgo.com/*",
+    "https://*.youtube.com/*",
+    "https://search.yahoo.com/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Parental Monitor Search Reporter"
+  }
+}

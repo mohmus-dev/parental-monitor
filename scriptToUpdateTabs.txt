@@ -1,0 +1,12 @@
+$path = "D:\Project\parental-monitor-cli\Makefile"
+Copy-Item $path "$path.bak"
+
+$lines = Get-Content $path
+for ($i = 0; $i -lt $lines.Count; $i++) {
+    if ($lines[$i] -match '^    ') {
+        $lines[$i] = "`t" + $lines[$i].Substring(4)
+    }
+}
+$content = $lines -join "`n"
+[System.IO.File]::WriteAllText($path, $content, (New-Object System.Text.UTF8Encoding($false)))
+Write-Host "Done writing $path"
