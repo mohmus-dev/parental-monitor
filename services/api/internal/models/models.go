@@ -24,6 +24,14 @@ type Child struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type PairingInvite struct {
+	ID        string
+	ParentID  string
+	ChildID   string
+	TokenHash string
+	ExpiresAt time.Time
+}
+
 type Device struct {
 	ID        string    `json:"id"`
 	ChildID   string    `json:"child_id"`
@@ -60,4 +68,38 @@ type AlertEvent struct {
 type HealthResponse struct {
 	Status string `json:"status"`
 	Time   string `json:"time"`
+}
+
+type DashboardActivity struct {
+	ID        string    `json:"id"`
+	ChildID   string    `json:"child_id"`
+	ChildName string    `json:"child_name"`
+	Query     string    `json:"query"`
+	Engine    string    `json:"engine"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+type DashboardSummary struct {
+	TotalChildren  int                 `json:"total_children"`
+	PairedDevices  int                 `json:"paired_devices"`
+	PendingPairing int                 `json:"pending_pairing"`
+	AlertsCount    int                 `json:"alerts_count"`
+	RecentActivity []DashboardActivity `json:"recent_activity"`
+	Alerts         []AlertEvent        `json:"alerts"`
+}
+
+type PaginatedAlertResponse struct {
+	Page       int          `json:"page"`
+	Limit      int          `json:"limit"`
+	Total      int          `json:"total"`
+	TotalPages int          `json:"total_pages"`
+	Items      []AlertEvent `json:"items"`
+}
+
+type PaginatedSearchResponse struct {
+	Page       int           `json:"page"`
+	Limit      int           `json:"limit"`
+	Total      int           `json:"total"`
+	TotalPages int           `json:"total_pages"`
+	Items      []SearchEvent `json:"items"`
 }

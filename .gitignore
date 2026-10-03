@@ -21,5 +21,11 @@ secrets/
 .idea/
 .DS_Store
 
+
+# Frontend
+services/dashboard/node_modules/
+services/dashboard/dist/
+services/dashboard/.env.local
+
 # OS
 Thumbs.db

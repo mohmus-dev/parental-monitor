@@ -6,17 +6,32 @@ A local Go application that receives submitted search queries from a Chrome exte
 
 ```mermaid
 flowchart LR
-    A[Chrome search navigation] --> B[Extension reads supported search URL]
-    B -->|POST query to 127.0.0.1:8765/search| C[Go local receiver]
-    C --> D[Compiled keyword matcher]
-    D -->|non-incognito history| E[(monitor.db)]
-    D -->|matched categories| F[Alert queue]
-    F -->|POST /api/alerts| G[Parent server]
+    P[Parent registers/login] --> D[Parent dashboard]
+    D --> C[Create child profile]
+    C --> I[Generate one-time pairing code]
+    I --> M[Child app installs CLI + extension]
+    M --> A[Consent + incognito approval]
+    A --> B[Device links to parent]
+    B --> E[CLI stores searches in local SQLite]
+    E --> W[Hourly worker syncs to Postgres]
+    W --> G[Postgres monitoring store]
+    G --> R[Parent dashboard reads backend data]
+    R --> O[Offline-friendly parent SQL cache for 7-day retention]
 ```
 
-The extension detects a search only after a supported search engine commits a top-level navigation. It works for typed or pasted text because it reads the submitted query from the resulting URL. It does not read the clipboard or general page text. Supported sites are Google, Bing, DuckDuckGo, Yahoo, and YouTube; see the extension manifest and service worker for exact host/query rules.
+The system is intentionally split in three layers:
 
-The Go app listens only on `127.0.0.1:8765`. Normal, non-incognito searches are stored locally in `monitor.db`. Incognito searches are not saved as ordinary search history, but matching alerts are still evaluated and sent. Alert payloads include the full matching query, category, matched term, and timestamp.
+- Identity + access: Firebase stores parent, child, and pairing metadata.
+- Monitoring data: Postgres stores alert/search events for fast querying and large data sets.
+- Local child runtime: the CLI keeps a local SQLite database for offline buffering and sync.
+
+The parent flow is: register email/password -> login -> dashboard -> create child profile -> generate pairing code -> child installs the CLI and extension -> confirm extension + incognito monitoring consent -> device links to parent. Every dashboard page is backed by API data, not static mock content.
+
+The browser extension works only on supported search engines and reports committed search navigation events. It does not read all page text or clipboard content. The CLI listens on `127.0.0.1:8765` and records local searches in `monitor.db`. Incognito traffic is explicitly gated behind the user approval flow, and matching incident alerts still continue to be evaluated when allowed.
+
+The hourly worker reads new rows from SQLite, writes them to Postgres, and tracks the last synced position so it never replays already processed rows. The dashboard reads from the parent API, which aggregates child data and shows real-time monitoring details from the backend.
+
+For performance at scale, the matcher uses a compiled token trie and category-based matching so it remains fast even with large keyword dictionaries and high-volume search traffic. All state-changing requests are protected by JWT and CSRF validation.
 
 ## Requirements
 
@@ -27,55 +42,74 @@ The Go app listens only on `127.0.0.1:8765`. Normal, non-incognito searches are 
 
 ## Quick Start: Windows
 
-Open PowerShell in the repository root (`D:\Project\parental-monitor-cli`). For a local end-to-end test, use two PowerShell windows.
+Open PowerShell in the repository root (`D:\Project\parental-monitor-cli`). Copy `.env.example` to `.env` and edit the values:
 
-1. Start the included development receiver:
+```powershell
+Copy-Item .env.example .env
+```
 
-   ```powershell
-   go run .\testserver\test_server.go
-   ```
+For parent/device setup, use separate PowerShell windows.
 
-   It listens on `http://localhost:8080` and prints received POST bodies. It is a test utility, not a production parent server.
-
-2. Start the monitor in a second window:
+1. Start the parent API:
 
    ```powershell
-   go run . -config .\config.json
+   go run .\services\api
    ```
 
-   Look for `Browser search receiver listening address=127.0.0.1:8765`.
+   It listens on `http://localhost:8080` and reads `PORT` and `JWT_SECRET` from `.env`.
 
-3. Load the extension once: open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the repository's `extension` folder. Reload the extension from this page after changing its files.
+2. Start the parent dashboard in a second window:
 
-4. In Chrome, search for a configured term, for example `wwe drugs beaten`, then press Enter. The extension badge should show `OK`; the monitor logs should show received search and keyword alerts; the test-server window should print the alert payload.
+   ```powershell
+   Set-Location services\dashboard
+   npm.cmd run dev
+   ```
 
-5. To test Incognito, open the extension's Details page and enable **Allow in Incognito**. Chrome requires this permission explicitly. Then open a new Incognito window and submit another test query.
+   Open the URL printed by Vite. Register/log in, create a child profile, and generate a one-time pairing code.
+
+3. On the child device, run the CLI from the repository root:
+
+   ```powershell
+   go run . --env .\.env --pair
+   ```
+
+   Type `yes` at the consent prompt, enter the dashboard code, and the CLI saves `CHILD_ID` and `DEVICE_ID` into `.env`.
+
+4. Start the CLI normally with `go run . --env .\.env`. Load the unpacked Chrome extension from the `extension` folder at `chrome://extensions`, then submit a search.
 
 To stop the foreground monitor, press **Ctrl+C**. The receiver status page is `http://127.0.0.1:8765/`; `/search` is an extension API endpoint, not a page to open directly.
 
+The CLI's alert sender uses `SERVER_URL` and `API_KEY`, but the parent API here does not yet expose the `/api/alerts` telemetry endpoint. Configure a compatible ingest server before expecting alerts to reach the dashboard. The included testserver also uses port 8080, so it cannot run at the same time as the parent API on its default port.
+
 ## Configuration
 
-`config.json` is loaded at startup. Restart the app after changing it.
+The CLI reads settings only from `.env`. Copy `.env.example` to `.env`, edit it, and restart the app after changing settings. Pairing saves `CHILD_ID` and `DEVICE_ID` into that same `.env` file.
 
 | Field | Meaning |
 | --- | --- |
-| `server_url` | Parent API base URL. The client appends `/api/alerts`. For local testing, this is `http://localhost:8080`. |
-| `api_key` | Sent to the parent API as `X-API-Key`; it is not copied into the Chrome extension. |
-| `device_name` | Included in locally stored search events. |
-| `scan_keywords` | Legacy/simple terms; terms not already in a group become their own category. |
-| `scan_keyword_groups` | Default category-to-term lists. Each category can match at most once per query. |
-| `custom_keywords` | Additional simple terms, merged with `scan_keywords`. |
-| `custom_keyword_groups` | Parent-defined categories/terms, merged with default groups. Duplicate terms are ignored case-insensitively within a category. |
-| `log_level` | `debug`, `info`, `warn`, or `error`. Defaults to `info`. |
-| `monitor_interval_ms`, `batch_size`, `flush_interval_sec` | Retained legacy settings. The extension-driven search receiver does not use the polling interval or search batch size; alerts are sent when queued and retried by the flusher. |
+| `POSTGRES_DSN` | Neon or Postgres connection string used by the API and worker. Example: `postgresql://user:pass@host/db?sslmode=require`. |
+| `USE_FIREBASE` | Enables Firebase-backed identity and pairing repositories. |
+| `FIREBASE_PROJECT_ID` | Firebase project ID used for parent-child identity. |
+| `FIREBASE_CREDENTIALS_PATH` | Path to the Firebase service account JSON. |
+| `JWT_SECRET` | Shared secret for JWT signing and validation. |
+| `API_URL` | Parent management API URL used for device pairing. |
+| `SERVER_URL` | Telemetry receiver base URL. The client appends `/api/alerts`. |
+| `API_KEY` | Sent to the telemetry receiver as `X-API-Key`; it is not copied into the Chrome extension. |
+| `DEVICE_NAME` | Included in locally stored search events. |
+| `SCAN_KEYWORDS` | JSON string array of terms; terms not already in a group become their own category. |
+| `SCAN_KEYWORD_GROUPS` | JSON object mapping categories to string arrays. |
+| `CUSTOM_KEYWORDS` | Additional JSON string array merged with `SCAN_KEYWORDS`. |
+| `CUSTOM_KEYWORD_GROUPS` | Additional JSON object of categories to merge with default groups. |
+| `LOG_LEVEL` | `debug`, `info`, `warn`, or `error`. Defaults to `info`. |
+| `MONITOR_INTERVAL_MS`, `BATCH_SIZE`, `FLUSH_INTERVAL_SEC` | Numeric settings; defaults are 50, 10, and 5. |
+| `WORKER_ENABLED`, `WORKER_SYNC_INTERVAL_SECONDS`, `MONITOR_DB_PATH` | Enable and configure the local SQLite -> Postgres sync worker. |
+| `CHILD_ID`, `DEVICE_ID` | Set by successful device pairing and stored in `.env`. |
 
 Example custom additions:
 
-```json
-"custom_keywords": ["family-specific phrase"],
-"custom_keyword_groups": {
-  "school_rules": ["custom phrase", "another phrase"]
-}
+```dotenv
+CUSTOM_KEYWORDS='["family-specific phrase"]'
+CUSTOM_KEYWORD_GROUPS='{"school_rules":["custom phrase","another phrase"]}'
 ```
 
 The analyzer normalizes case, matches complete words or consecutive word phrases, and returns one match per category. It does not infer synonyms: add each desired synonym explicitly. Broad terms can produce false positives, so test and tune the lists for your family.
@@ -105,7 +139,7 @@ Build for the current OS:
 ```powershell
 New-Item -ItemType Directory -Force .\build | Out-Null
 go build -o .\build\parental-monitor.exe .
-.\build\parental-monitor.exe -config .\config.json
+.\build\parental-monitor.exe -env .\.env
 ```
 
 The source also contains `Makefile` targets for platform builds and `build.sh` for cross-platform builds. Windows users can use `go build` directly as above.
@@ -113,7 +147,7 @@ The source also contains `Makefile` targets for platform builds and `build.sh` f
 Daemon mode is for a built executable, not the `go run` development flow:
 
 ```powershell
-.\build\parental-monitor.exe -config .\config.json -daemon
+.\build\parental-monitor.exe -env .\.env -daemon
 .\build\parental-monitor.exe -stop
 ```
 
@@ -124,7 +158,7 @@ The daemon writes `daemon.log` and `monitor.pid` in its working directory. Foreg
 ### Application and configuration
 
 - `main.go` loads config, opens SQLite, compiles the matcher, starts the local HTTP receiver, wires search/alert callbacks, and shuts down gracefully.
-- `config.json` contains server settings and default/custom keyword lists.
+- `.env` contains the CLI configuration and pairing state; copy `.env.example` as a starting point.
 - `go.mod`, `go.sum` declare and lock Go dependencies.
 - `daemon_windows.go`, `daemon_unix.go` detach and stop the app on their respective OSes.
 - `Makefile`, `build.sh` provide build, test, formatting, and cross-build commands.

@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"parental-monitor-cli/services/api/internal/factory"
@@ -18,6 +19,18 @@ func main() {
 	_ = godotenv.Load()
 
 	var h *handlers.Handler
+	postgresDSN := strings.TrimSpace(os.Getenv("POSTGRES_DSN"))
+	var monitoringRepo factory.MonitoringRepository
+	if postgresDSN != "" {
+		pgStore, err := storage.NewPostgresMonitoringStore(postgresDSN)
+		if err != nil {
+			log.Printf("postgres monitoring init failed: %v", err)
+			monitoringRepo = nil
+		} else {
+			monitoringRepo = pgStore
+			log.Println("using Postgres-backed monitoring repository")
+		}
+	}
 
 	useFirebase := os.Getenv("USE_FIREBASE") == "true" || os.Getenv("FIREBASE_PROJECT_ID") != ""
 	if useFirebase {
@@ -25,14 +38,26 @@ func main() {
 		if err != nil {
 			log.Printf("firebase init failed: %v; falling back to memory", err)
 			store := storage.NewMemoryStore()
-			h = handlers.NewHandler(store)
+			if monitoringRepo == nil {
+				h = handlers.NewHandler(store)
+			} else {
+				h = handlers.NewHandlerFactory(factory.NewHybridFactory(store, store, store, monitoringRepo))
+			}
 		} else {
-			h = handlers.NewHandlerFactory(repos)
+			if monitoringRepo == nil {
+				h = handlers.NewHandlerFactory(repos)
+			} else {
+				h = handlers.NewHandlerFactory(factory.NewHybridFactory(repos.ParentRepository(), repos.ChildRepository(), repos.PairingRepository(), monitoringRepo))
+			}
 			log.Println("using Firebase-backed repositories")
 		}
 	} else {
 		store := storage.NewMemoryStore()
-		h = handlers.NewHandler(store)
+		if monitoringRepo == nil {
+			h = handlers.NewHandler(store)
+		} else {
+			h = handlers.NewHandlerFactory(factory.NewHybridFactory(store, store, store, monitoringRepo))
+		}
 		log.Println("using in-memory repositories")
 	}
 

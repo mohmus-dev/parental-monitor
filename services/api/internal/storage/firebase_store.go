@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -17,12 +19,16 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type FirebaseStore struct {
 	client    *firestore.Client
 	parentCol string
 	childCol  string
+	deviceCol string
+	inviteCol string
 }
 
 func NewFirebaseStore(ctx context.Context, projectID, credentialsPath string) (*FirebaseStore, error) {
@@ -54,6 +60,8 @@ func NewFirebaseStore(ctx context.Context, projectID, credentialsPath string) (*
 		client:    client,
 		parentCol: "parents",
 		childCol:  "children",
+		deviceCol: "devices",
+		inviteCol: "pairing_invites",
 	}, nil
 }
 
@@ -232,16 +240,15 @@ func (s *FirebaseStore) CreateChild(parentID, name string, age int, deviceID str
 	if strings.TrimSpace(name) == "" {
 		return models.Child{}, errors.New("name is required")
 	}
-	if strings.TrimSpace(deviceID) == "" {
-		return models.Child{}, errors.New("device_id is required")
-	}
-
-	iter := s.client.Collection(s.childCol).Where("device_id", "==", deviceID).Limit(1).Documents(context.Background())
-	defer iter.Stop()
-	if _, err := iter.Next(); err == nil {
-		return models.Child{}, errors.New("device_id already registered")
-	} else if err != iterator.Done && err != nil {
-		return models.Child{}, err
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID != "" {
+		iter := s.client.Collection(s.childCol).Where("device_id", "==", deviceID).Limit(1).Documents(context.Background())
+		defer iter.Stop()
+		if _, err := iter.Next(); err == nil {
+			return models.Child{}, errors.New("device_id already registered")
+		} else if err != iterator.Done && err != nil {
+			return models.Child{}, err
+		}
 	}
 
 	appName = strings.TrimSpace(appName)
@@ -263,6 +270,19 @@ func (s *FirebaseStore) CreateChild(parentID, name string, age int, deviceID str
 		Platform:  platform,
 		CreatedAt: time.Now().UTC(),
 	}
+	if deviceID != "" {
+		deviceRef := s.client.Collection(s.deviceCol).Doc(deviceDocumentID(deviceID))
+		_, err := deviceRef.Create(context.Background(), map[string]interface{}{
+			"child_id":   child.ID,
+			"created_at": child.CreatedAt,
+		})
+		if status.Code(err) == codes.AlreadyExists {
+			return models.Child{}, errors.New("device_id already registered")
+		}
+		if err != nil {
+			return models.Child{}, err
+		}
+	}
 	_, err := s.client.Collection(s.childCol).Doc(child.ID).Set(context.Background(), map[string]interface{}{
 		"id":         child.ID,
 		"parent_id":  child.ParentID,
@@ -274,9 +294,137 @@ func (s *FirebaseStore) CreateChild(parentID, name string, age int, deviceID str
 		"created_at": child.CreatedAt,
 	})
 	if err != nil {
+		if deviceID != "" {
+			if _, cleanupErr := s.client.Collection(s.deviceCol).Doc(deviceDocumentID(deviceID)).Delete(context.Background()); cleanupErr != nil {
+				return models.Child{}, fmt.Errorf("create child failed: %v; release device reservation: %w", err, cleanupErr)
+			}
+		}
 		return models.Child{}, err
 	}
 	return child, nil
+}
+
+func (s *FirebaseStore) CreatePairingInvite(parentID, childID, tokenHash string, expiresAt time.Time) error {
+	childDoc, err := s.client.Collection(s.childCol).Doc(childID).Get(context.Background())
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return errors.New("child not found")
+		}
+		return err
+	}
+	child, err := childFromDoc(childDoc)
+	if err != nil {
+		return err
+	}
+	if child.ParentID != parentID {
+		return errors.New("child not found")
+	}
+	if child.DeviceID != "" {
+		return errors.New("child already has a paired device")
+	}
+	if tokenHash == "" || !expiresAt.After(time.Now()) {
+		return errors.New("invalid pairing invite")
+	}
+
+	_, err = s.client.Collection(s.inviteCol).Doc(tokenHash).Set(context.Background(), map[string]interface{}{
+		"parent_id":  parentID,
+		"child_id":   childID,
+		"expires_at": expiresAt.UTC(),
+		"created_at": time.Now().UTC(),
+	})
+	return err
+}
+
+func (s *FirebaseStore) RedeemPairingInvite(tokenHash, deviceID, platform string) (models.Child, error) {
+	deviceID = strings.TrimSpace(deviceID)
+	if tokenHash == "" || deviceID == "" {
+		return models.Child{}, errors.New("invite_code and device_id are required")
+	}
+	iter := s.client.Collection(s.childCol).Where("device_id", "==", deviceID).Limit(1).Documents(context.Background())
+	defer iter.Stop()
+	if _, err := iter.Next(); err == nil {
+		return models.Child{}, errors.New("device_id already registered")
+	} else if err != iterator.Done {
+		return models.Child{}, err
+	}
+
+	var paired models.Child
+	err := s.client.RunTransaction(context.Background(), func(ctx context.Context, tx *firestore.Transaction) error {
+		inviteRef := s.client.Collection(s.inviteCol).Doc(tokenHash)
+		inviteDoc, err := tx.Get(inviteRef)
+		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				return errors.New("pairing invite is invalid or already used")
+			}
+			return err
+		}
+		invite := inviteDoc.Data()
+		if _, used := invite["used_at"]; used {
+			return errors.New("pairing invite is invalid or already used")
+		}
+		expiresAt, ok := invite["expires_at"].(time.Time)
+		if !ok || !expiresAt.After(time.Now()) {
+			return errors.New("pairing invite has expired")
+		}
+
+		childID := fmt.Sprint(invite["child_id"])
+		parentID := fmt.Sprint(invite["parent_id"])
+		childRef := s.client.Collection(s.childCol).Doc(childID)
+		childDoc, err := tx.Get(childRef)
+		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				return errors.New("child not found")
+			}
+			return err
+		}
+		child, err := childFromDoc(childDoc)
+		if err != nil {
+			return err
+		}
+		if child.ParentID != parentID {
+			return errors.New("child not found")
+		}
+		if child.DeviceID != "" {
+			return errors.New("child already has a paired device")
+		}
+
+		platform = strings.TrimSpace(platform)
+		if platform == "" {
+			platform = "unknown"
+		}
+		child.DeviceID = deviceID
+		child.Platform = platform
+		child.AppName = "Parental Monitor CLI"
+		paired = child
+		now := time.Now().UTC()
+		if err := tx.Set(childRef, map[string]interface{}{
+			"id":         child.ID,
+			"parent_id":  child.ParentID,
+			"name":       child.Name,
+			"age":        child.Age,
+			"device_id":  child.DeviceID,
+			"app_name":   child.AppName,
+			"platform":   child.Platform,
+			"created_at": child.CreatedAt,
+		}); err != nil {
+			return err
+		}
+		deviceRef := s.client.Collection(s.deviceCol).Doc(deviceDocumentID(deviceID))
+		if err := tx.Create(deviceRef, map[string]interface{}{
+			"child_id":   child.ID,
+			"created_at": now,
+		}); err != nil {
+			return err
+		}
+		return tx.Update(inviteRef, []firestore.Update{{Path: "used_at", Value: now}})
+	})
+	if err != nil {
+		if status.Code(err) == codes.AlreadyExists {
+			return models.Child{}, errors.New("device_id already registered")
+		}
+		return models.Child{}, err
+	}
+	return paired, nil
 }
 
 func (s *FirebaseStore) ListChildren() []models.Child {
@@ -358,6 +506,12 @@ func (s *FirebaseStore) DeleteChildren(parentID string, childIDs []string) error
 		}
 		if _, err := s.client.Collection(s.childCol).Doc(doc.Ref.ID).Delete(context.Background()); err != nil {
 			return err
+		}
+		deviceID := strings.TrimSpace(fmt.Sprint(doc.Data()["device_id"]))
+		if deviceID != "" && deviceID != "<nil>" {
+			if _, err := s.client.Collection(s.deviceCol).Doc(deviceDocumentID(deviceID)).Delete(context.Background()); err != nil {
+				return err
+			}
 		}
 		deleted++
 	}
@@ -463,4 +617,98 @@ func childFromDoc(doc *firestore.DocumentSnapshot) (models.Child, error) {
 		return models.Child{}, errors.New("invalid child document")
 	}
 	return child, nil
+}
+
+func (s *FirebaseStore) SaveSearch(event models.SearchEvent) models.SearchEvent {
+	if event.ID == "" {
+		event.ID = uuid.NewString()
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now().UTC()
+	}
+	_, err := s.client.Collection("searches").Doc(event.ID).Set(context.Background(), map[string]interface{}{
+		"id":           event.ID,
+		"child_id":     event.ChildID,
+		"device_id":    event.DeviceID,
+		"query":        event.Query,
+		"engine":       event.Engine,
+		"incognito":    event.Incognito,
+		"window_title": event.WindowTitle,
+		"timestamp":    event.Timestamp,
+	})
+	if err != nil {
+		return event
+	}
+	return event
+}
+
+func (s *FirebaseStore) SaveAlert(event models.AlertEvent) models.AlertEvent {
+	if event.ID == "" {
+		event.ID = uuid.NewString()
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now().UTC()
+	}
+	_, err := s.client.Collection("alerts").Doc(event.ID).Set(context.Background(), map[string]interface{}{
+		"id":        event.ID,
+		"child_id":  event.ChildID,
+		"device_id": event.DeviceID,
+		"category":  event.Category,
+		"keyword":   event.Keyword,
+		"query":     event.Query,
+		"timestamp": event.Timestamp,
+	})
+	if err != nil {
+		return event
+	}
+	return event
+}
+
+func (s *FirebaseStore) ListSearches() []models.SearchEvent {
+	iter := s.client.Collection("searches").Documents(context.Background())
+	defer iter.Stop()
+
+	items := make([]models.SearchEvent, 0)
+	for {
+		doc, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			continue
+		}
+		var item models.SearchEvent
+		if err := doc.DataTo(&item); err == nil {
+			item.ID = doc.Ref.ID
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+func (s *FirebaseStore) ListAlerts() []models.AlertEvent {
+	iter := s.client.Collection("alerts").Documents(context.Background())
+	defer iter.Stop()
+
+	items := make([]models.AlertEvent, 0)
+	for {
+		doc, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			continue
+		}
+		var item models.AlertEvent
+		if err := doc.DataTo(&item); err == nil {
+			item.ID = doc.Ref.ID
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+func deviceDocumentID(deviceID string) string {
+	sum := sha256.Sum256([]byte(deviceID))
+	return hex.EncodeToString(sum[:])
 }

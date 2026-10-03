@@ -1,6 +1,9 @@
 package storage
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestCreateParentAssignsUniqueIDAndRejectsDuplicateEmail(t *testing.T) {
 	store := NewMemoryStore()
@@ -125,5 +128,66 @@ func TestDeleteChildrenByIDRemovesOnlySelectedChildren(t *testing.T) {
 	children := store.ListChildrenByParent(parent.ID)
 	if len(children) != 1 || children[0].ID != c2.ID {
 		t.Fatalf("expected only the selected child to be removed")
+	}
+}
+
+func TestPairingInviteIsSingleUseAndRegistersDevice(t *testing.T) {
+	store := NewMemoryStore()
+	parent, err := store.CreateParentWithPassword("John", "john@example.com", "Secret123!")
+	if err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	child, err := store.CreateChild(parent.ID, "Emma", 10, "")
+	if err != nil {
+		t.Fatalf("create child profile: %v", err)
+	}
+	expiresAt := time.Now().Add(time.Minute)
+	if err := store.CreatePairingInvite(parent.ID, child.ID, "invite-hash", expiresAt); err != nil {
+		t.Fatalf("create pairing invite: %v", err)
+	}
+
+	paired, err := store.RedeemPairingInvite("invite-hash", "device-001", "windows")
+	if err != nil {
+		t.Fatalf("redeem pairing invite: %v", err)
+	}
+	if paired.DeviceID != "device-001" || paired.ParentID != parent.ID || paired.Platform != "windows" {
+		t.Fatalf("paired child mismatch: %#v", paired)
+	}
+	if _, err := store.RedeemPairingInvite("invite-hash", "device-002", "windows"); err == nil {
+		t.Fatal("expected pairing invite to be single-use")
+	}
+	if _, err := store.RedeemPairingInvite("another-invite", "device-001", "windows"); err == nil {
+		t.Fatal("expected duplicate device id to be rejected")
+	}
+}
+
+func TestPairingInviteRequiresOwnedUnpairedChildAndExpires(t *testing.T) {
+	store := NewMemoryStore()
+	parent, err := store.CreateParentWithPassword("John", "john@example.com", "Secret123!")
+	if err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	otherParent, err := store.CreateParentWithPassword("Jane", "jane@example.com", "Secret123!")
+	if err != nil {
+		t.Fatalf("create second parent: %v", err)
+	}
+	child, err := store.CreateChild(parent.ID, "Emma", 10, "")
+	if err != nil {
+		t.Fatalf("create child profile: %v", err)
+	}
+	if err := store.CreatePairingInvite(otherParent.ID, child.ID, "wrong-owner", time.Now().Add(time.Minute)); err == nil {
+		t.Fatal("expected a different parent to be denied")
+	}
+	if err := store.CreatePairingInvite(parent.ID, child.ID, "expired", time.Now().Add(-time.Minute)); err == nil {
+		t.Fatal("expected expired invite to be rejected")
+	}
+	if err := store.CreatePairingInvite(parent.ID, child.ID, "valid", time.Now().Add(time.Minute)); err != nil {
+		t.Fatalf("create valid invite: %v", err)
+	}
+	if _, err := store.RedeemPairingInvite("valid", "device-001", "windows"); err != nil {
+		t.Fatalf("redeem valid invite: %v", err)
+	}
+	if err := store.CreatePairingInvite(parent.ID, child.ID, "second", time.Now().Add(time.Minute)); err == nil {
+		t.Fatal("expected paired child to reject another invite")
 	}
 }

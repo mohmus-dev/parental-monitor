@@ -2,6 +2,8 @@
 
 This service provides the backend foundation for parent registration, child management, device registration, and monitoring events.
 
+For the recommended frontend stack, browser integration notes, and the API contract available to the frontend, see [Frontend Integration Guide](FRONTEND_INTEGRATION.md).
+
 ## Run locally
 
 ```bash
@@ -79,6 +81,8 @@ The API uses a JWT kept in the `auth_token` cookie. Parent-scoped endpoints alwa
 - `DELETE /api/v1/parents/me`
 - `GET /api/v1/parents/me/children`
 - `POST /api/v1/parents/me/children`
+- `POST /api/v1/parents/me/children/{child_id}/pairing-invites`
+- `POST /api/v1/devices/pair`
 - `DELETE /api/v1/parents/me/children`
 
 ### Login
@@ -149,10 +153,7 @@ Request body:
 ```json
 {
   "name": "Emma",
-  "age": 10,
-  "device_id": "child-device-001",
-  "app_name": "Child App",
-  "platform": "android"
+  "age": 10
 }
 ```
 
@@ -162,12 +163,35 @@ curl -X POST http://localhost:8080/api/v1/parents/me/children \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Emma",
-    "age": 10,
-    "device_id": "child-device-001",
-    "app_name": "Child App",
-    "platform": "android"
+    "age": 10
   }'
 ```
+
+### Create and redeem a device pairing code
+
+After creating the child profile, an authenticated parent can generate a one-time code:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/parents/me/children/<child-id>/pairing-invites \
+  --cookie "auth_token=<jwt>"
+```
+
+The response includes a random code and an expiry 15 minutes later. The server stores only its hash. Run the CLI manually on the device being paired; the CLI asks its user to review the monitoring disclosure and confirm before redeeming the code:
+
+```powershell
+go run . --env .env --pair
+```
+
+The CLI reads its settings from the repository-root `.env` file. Set the parent API URL and telemetry receiver settings there, for example:
+
+```dotenv
+API_URL=http://localhost:8080
+SERVER_URL=https://your-monitoring-ingest.example
+```
+
+The user then enters the code shown in the parent dashboard. Pairing links the device to the selected child, records its platform and device ID, and consumes the code. Reuse, expired codes, devices already registered elsewhere, and children already paired to another device are rejected.
+
+This repository does not publish or host CLI installers: pairing is not an install link and will not silently install software. Download/run the CLI through a trusted, explicit installation process. The current CLI captures printable text typed while Chrome is active and active window titles; this can include sensitive text. Pair only with the device user's informed consent.
 
 ### Delete selected children for current parent
 

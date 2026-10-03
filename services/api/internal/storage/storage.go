@@ -13,21 +13,23 @@ import (
 )
 
 type MemoryStore struct {
-	mu            sync.RWMutex
-	parents       map[string]models.Parent
-	parentByEmail map[string]string
-	children      map[string]models.Child
-	devices       map[string]models.Device
-	searches      []models.SearchEvent
-	alerts        []models.AlertEvent
+	mu             sync.RWMutex
+	parents        map[string]models.Parent
+	parentByEmail  map[string]string
+	children       map[string]models.Child
+	devices        map[string]models.Device
+	pairingInvites map[string]models.PairingInvite
+	searches       []models.SearchEvent
+	alerts         []models.AlertEvent
 }
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		parents:       map[string]models.Parent{},
-		parentByEmail: map[string]string{},
-		children:      map[string]models.Child{},
-		devices:       map[string]models.Device{},
+		parents:        map[string]models.Parent{},
+		parentByEmail:  map[string]string{},
+		children:       map[string]models.Child{},
+		devices:        map[string]models.Device{},
+		pairingInvites: map[string]models.PairingInvite{},
 	}
 }
 
@@ -149,6 +151,11 @@ func (s *MemoryStore) DeleteParent(id string) error {
 			if child.DeviceID != "" {
 				delete(s.devices, child.DeviceID)
 			}
+			for tokenHash, invite := range s.pairingInvites {
+				if invite.ChildID == childID {
+					delete(s.pairingInvites, tokenHash)
+				}
+			}
 		}
 	}
 	return nil
@@ -197,11 +204,11 @@ func (s *MemoryStore) CreateChild(parentID, name string, age int, deviceID strin
 	if strings.TrimSpace(name) == "" {
 		return models.Child{}, errors.New("name is required")
 	}
-	if strings.TrimSpace(deviceID) == "" {
-		return models.Child{}, errors.New("device_id is required")
-	}
-	if _, exists := s.devices[deviceID]; exists {
-		return models.Child{}, errors.New("device_id already registered")
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID != "" {
+		if _, exists := s.devices[deviceID]; exists {
+			return models.Child{}, errors.New("device_id already registered")
+		}
 	}
 
 	appName = strings.TrimSpace(appName)
@@ -213,10 +220,75 @@ func (s *MemoryStore) CreateChild(parentID, name string, age int, deviceID strin
 		appName = "Child App"
 	}
 
-	c := models.Child{ID: uuid.NewString(), ParentID: parentID, Name: name, Age: age, DeviceID: deviceID, AppName: appName, Platform: platform, CreatedAt: time.Now()}
+	c := models.Child{ID: uuid.NewString(), ParentID: parentID, Name: strings.TrimSpace(name), Age: age, DeviceID: deviceID, AppName: appName, Platform: platform, CreatedAt: time.Now().UTC()}
 	s.children[c.ID] = c
-	s.devices[deviceID] = models.Device{ID: deviceID, ChildID: c.ID, Name: name, Type: "mobile", Platform: platform, CreatedAt: time.Now(), LastSeen: time.Now()}
+	if deviceID != "" {
+		s.devices[deviceID] = models.Device{ID: deviceID, ChildID: c.ID, Name: c.Name, Type: "desktop", Platform: platform, CreatedAt: time.Now(), LastSeen: time.Now()}
+	}
 	return c, nil
+}
+
+func (s *MemoryStore) CreatePairingInvite(parentID, childID, tokenHash string, expiresAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	child, exists := s.children[childID]
+	if !exists || child.ParentID != parentID {
+		return errors.New("child not found")
+	}
+	if child.DeviceID != "" {
+		return errors.New("child already has a paired device")
+	}
+	if tokenHash == "" || !expiresAt.After(time.Now()) {
+		return errors.New("invalid pairing invite")
+	}
+	s.pairingInvites[tokenHash] = models.PairingInvite{
+		ID:        uuid.NewString(),
+		ParentID:  parentID,
+		ChildID:   childID,
+		TokenHash: tokenHash,
+		ExpiresAt: expiresAt,
+	}
+	return nil
+}
+
+func (s *MemoryStore) RedeemPairingInvite(tokenHash, deviceID, platform string) (models.Child, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	invite, exists := s.pairingInvites[tokenHash]
+	if !exists {
+		return models.Child{}, errors.New("pairing invite is invalid or already used")
+	}
+	if !invite.ExpiresAt.After(time.Now()) {
+		delete(s.pairingInvites, tokenHash)
+		return models.Child{}, errors.New("pairing invite has expired")
+	}
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return models.Child{}, errors.New("device_id is required")
+	}
+	if _, exists := s.devices[deviceID]; exists {
+		return models.Child{}, errors.New("device_id already registered")
+	}
+	child, exists := s.children[invite.ChildID]
+	if !exists || child.ParentID != invite.ParentID {
+		return models.Child{}, errors.New("child not found")
+	}
+	if child.DeviceID != "" {
+		return models.Child{}, errors.New("child already has a paired device")
+	}
+	platform = strings.TrimSpace(platform)
+	if platform == "" {
+		platform = "unknown"
+	}
+	child.DeviceID = deviceID
+	child.Platform = platform
+	child.AppName = "Parental Monitor CLI"
+	s.children[child.ID] = child
+	s.devices[deviceID] = models.Device{ID: deviceID, ChildID: child.ID, Name: child.Name, Type: "desktop", Platform: platform, CreatedAt: time.Now().UTC(), LastSeen: time.Now().UTC()}
+	delete(s.pairingInvites, tokenHash)
+	return child, nil
 }
 
 func (s *MemoryStore) ListChildrenByParent(parentID string) []models.Child {
@@ -264,6 +336,11 @@ func (s *MemoryStore) DeleteChildren(parentID string, childIDs []string) error {
 		delete(s.children, childID)
 		if child.DeviceID != "" {
 			delete(s.devices, child.DeviceID)
+		}
+		for tokenHash, invite := range s.pairingInvites {
+			if invite.ChildID == childID {
+				delete(s.pairingInvites, tokenHash)
+			}
 		}
 		deleted++
 	}

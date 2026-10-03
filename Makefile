@@ -79,7 +79,7 @@ build-all: build-windows build-linux build-mac
 .PHONY: run
 run: build
 	@printf "$(CYAN)$(BOLD)[RUN]$(NC) Running in foreground mode...\n"
-	$(BUILD_DIR)/$(BINARY) -config config.json
+	$(BUILD_DIR)/$(BINARY) -env .env
 
 # ============================================================
 # Run as background daemon
@@ -87,7 +87,7 @@ run: build
 .PHONY: run-daemon
 run-daemon: build
 	@printf "$(CYAN)$(BOLD)[RUN]$(NC) Starting as background daemon...\n"
-	$(BUILD_DIR)/$(BINARY) -config config.json -daemon
+	$(BUILD_DIR)/$(BINARY) -env .env -daemon
 
 # ============================================================
 # Stop the daemon

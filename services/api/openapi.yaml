@@ -63,3 +63,64 @@ paths:
           description: Invalid request body
         '409':
           description: Parent already exists for this email
+
+  /api/v1/parents/me/children/{child_id}/pairing-invites:
+    post:
+      summary: Create a one-time device pairing code
+      security:
+        - ParentCookie: []
+      parameters:
+        - name: child_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: Pairing code created; expires after 15 minutes
+          content:
+            application/json:
+              example:
+                code: random-one-time-code
+                expires_at: '2026-10-03T12:15:00Z'
+        '401':
+          description: Parent session is missing or invalid
+        '404':
+          description: Child does not belong to the authenticated parent
+        '409':
+          description: Child already has a paired device
+
+  /api/v1/devices/pair:
+    post:
+      summary: Redeem a one-time code from the child device CLI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - code
+                - device_id
+                - platform
+              properties:
+                code:
+                  type: string
+                device_id:
+                  type: string
+                platform:
+                  type: string
+      responses:
+        '200':
+          description: Device paired to the child
+        '400':
+          description: Invalid or expired pairing code
+        '409':
+          description: Device or child is already paired
+
+components:
+  securitySchemes:
+    ParentCookie:
+      type: apiKey
+      in: cookie
+      name: auth_token

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"log"
 	"net"
@@ -22,29 +21,40 @@ import (
 const searchReceiverAddress = "127.0.0.1:8765"
 
 type Config struct {
-	ServerURL           string              `json:"server_url"`
-	APIKey              string              `json:"api_key"`
-	DeviceName          string              `json:"device_name"`
-	MonitorIntervalMs   int                 `json:"monitor_interval_ms"`
-	BatchSize           int                 `json:"batch_size"`
-	FlushIntervalSec    int                 `json:"flush_interval_sec"`
-	ScanKeywords        []string            `json:"scan_keywords"`
-	ScanKeywordGroups   map[string][]string `json:"scan_keyword_groups"`
-	CustomKeywords      []string            `json:"custom_keywords"`
-	CustomKeywordGroups map[string][]string `json:"custom_keyword_groups"`
-	LogLevel            string              `json:"log_level"`
+	APIURL              string
+	ServerURL           string
+	APIKey              string
+	ChildID             string
+	DeviceID            string
+	DeviceName          string
+	MonitorIntervalMs   int
+	BatchSize           int
+	FlushIntervalSec    int
+	ScanKeywords        []string
+	ScanKeywordGroups   map[string][]string
+	CustomKeywords      []string
+	CustomKeywordGroups map[string][]string
+	LogLevel            string
 }
 
 func main() {
 	// Parse command line flags
-	configPath := flag.String("config", "config.json", "path to config file")
+	envPath := flag.String("env", ".env", "path to environment file")
+	pair := flag.Bool("pair", false, "pair this device using a parent-generated code")
 	daemon := flag.Bool("daemon", false, "run as background service")
 	stop := flag.Bool("stop", false, "stop the background service")
 	flag.Parse()
 
+	if *pair {
+		if err := runPairing(*envPath); err != nil {
+			log.Fatalf("Device pairing failed: %v", err)
+		}
+		return
+	}
+
 	// ============ DAEMON MODE HANDLING ============
 	if *daemon {
-		daemonize(*configPath) // platform-specific, defined in daemon_windows.go / daemon_unix.go
+		daemonize(*envPath) // platform-specific, defined in daemon_windows.go / daemon_unix.go
 		return
 	}
 
@@ -55,7 +65,10 @@ func main() {
 	// ==============================================
 
 	// Load config
-	cfg := loadConfig(*configPath)
+	cfg, err := loadConfig(*envPath)
+	if err != nil {
+		log.Fatalf("Failed to load environment: %v", err)
+	}
 
 	// Setup logger
 	logger := logger.NewLogger(cfg.LogLevel)
@@ -116,6 +129,8 @@ func newSearchHandler(cfg Config, store *storage.Storage, client *network.Client
 		cfg.DeviceName,
 		analyzer,
 		func(query monitor.SearchEvent) {
+			query.ChildID = cfg.ChildID
+			query.DeviceID = cfg.DeviceID
 			logger.Info("Browser search received", "engine", query.Engine, "incognito", query.Incognito, "query_length", len(query.Query))
 
 			if store != nil {
@@ -125,6 +140,8 @@ func newSearchHandler(cfg Config, store *storage.Storage, client *network.Client
 			}
 		},
 		func(alert monitor.AlertEvent) {
+			alert.ChildID = cfg.ChildID
+			alert.DeviceID = cfg.DeviceID
 			logger.Warn("Keyword alert detected", "category", alert.Category, "keyword", alert.Keyword)
 			if store != nil {
 				if err := store.SaveAlert(alert); err != nil {
@@ -136,30 +153,4 @@ func newSearchHandler(cfg Config, store *storage.Storage, client *network.Client
 			}
 		},
 	)
-}
-
-func loadConfig(path string) Config {
-	file, err := os.Open(path)
-	if err != nil {
-		log.Fatalf("Failed to open config: %v", err)
-	}
-	defer file.Close()
-
-	var cfg Config
-	if err := json.NewDecoder(file).Decode(&cfg); err != nil {
-		log.Fatalf("Invalid config: %v", err)
-	}
-
-	// Set defaults
-	if cfg.MonitorIntervalMs == 0 {
-		cfg.MonitorIntervalMs = 50
-	}
-	if cfg.BatchSize == 0 {
-		cfg.BatchSize = 10
-	}
-	if cfg.FlushIntervalSec == 0 {
-		cfg.FlushIntervalSec = 5
-	}
-
-	return cfg
 }

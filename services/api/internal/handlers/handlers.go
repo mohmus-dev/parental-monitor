@@ -1,11 +1,17 @@
 package handlers
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,18 +24,65 @@ import (
 type Handler struct {
 	repos factory.RepositoryFactory
 	auth  *auth.JWTService
+	csrf  *auth.CSRFService
 }
 
 func NewHandler(store *storage.MemoryStore) *Handler {
-	return &Handler{repos: factory.NewMemoryFactory(store), auth: auth.NewJWTService(os.Getenv("JWT_SECRET"))}
+	return &Handler{repos: factory.NewMemoryFactory(store), auth: auth.NewJWTService(os.Getenv("JWT_SECRET")), csrf: auth.NewCSRFService(os.Getenv("JWT_SECRET"))}
 }
 
 func NewHandlerFactory(repos factory.RepositoryFactory) *Handler {
-	return &Handler{repos: repos, auth: auth.NewJWTService(os.Getenv("JWT_SECRET"))}
+	return &Handler{repos: repos, auth: auth.NewJWTService(os.Getenv("JWT_SECRET")), csrf: auth.NewCSRFService(os.Getenv("JWT_SECRET"))}
 }
 
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(models.HealthResponse{Status: "ok", Time: time.Now().UTC().Format(time.RFC3339)})
+}
+
+func (h *Handler) issueCSRFToken(w http.ResponseWriter) string {
+	if h.csrf == nil {
+		return ""
+	}
+	token, err := h.csrf.Generate()
+	if err != nil {
+		return ""
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "csrf_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: false,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   false,
+		Expires:  time.Now().Add(30 * 24 * time.Hour),
+	})
+	return token
+}
+
+func (h *Handler) requireCSRF(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+		return true
+	}
+	if !strings.HasPrefix(r.URL.Path, "/api/v1/") {
+		return true
+	}
+
+	switch r.URL.Path {
+	case "/api/v1/auth/csrf", "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/parents/register", "/api/v1/devices/pair":
+		return true
+	}
+
+	token := strings.TrimSpace(r.Header.Get("X-CSRF-Token"))
+	if token == "" {
+		if cookie, err := r.Cookie("csrf_token"); err == nil {
+			token = cookie.Value
+		}
+	}
+	if h.csrf == nil || !h.csrf.Validate(token) {
+		http.Error(w, "csrf token required", http.StatusForbidden)
+		return false
+	}
+	return true
 }
 
 func (h *Handler) clearAuthCookie(w http.ResponseWriter) {
@@ -173,6 +226,24 @@ func (h *Handler) handleCreateParent(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(response)
 }
 
+func (h *Handler) handleCSRFToken(w http.ResponseWriter, r *http.Request) {
+	token, err := h.csrf.Generate()
+	if err != nil {
+		http.Error(w, "unable to generate csrf token", http.StatusInternalServerError)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "csrf_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: false,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   false,
+		Expires:  time.Now().Add(30 * 24 * time.Hour),
+	})
+	_ = json.NewEncoder(w).Encode(map[string]string{"csrf_token": token})
+}
+
 func (h *Handler) handleParentLogin(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		Email    string `json:"email"`
@@ -208,6 +279,7 @@ func (h *Handler) handleParentLogin(w http.ResponseWriter, r *http.Request) {
 		Secure:   false,
 		Expires:  time.Now().Add(30 * 24 * time.Hour),
 	})
+	h.issueCSRFToken(w)
 	response := struct {
 		Token  string `json:"token"`
 		Expiry string `json:"expiry"`
@@ -222,6 +294,64 @@ func (h *Handler) handleListChildren(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(h.repos.ChildRepository().ListChildren())
 }
 
+func (h *Handler) handleDashboardSummary(w http.ResponseWriter, r *http.Request) {
+	parentID, err := h.parentIDFromToken(r)
+	if err != nil {
+		h.writeAuthError(w, err)
+		return
+	}
+
+	children := h.repos.ChildRepository().ListChildrenByParent(parentID)
+	paired := 0
+	pending := 0
+	childIDs := make(map[string]string, len(children))
+	for _, child := range children {
+		childIDs[child.ID] = child.Name
+		if strings.TrimSpace(child.DeviceID) != "" {
+			paired++
+		} else {
+			pending++
+		}
+	}
+
+	monitoring := h.repos.MonitoringRepository()
+	alerts := monitoring.ListAlerts()
+	searches := monitoring.ListSearches()
+
+	filteredAlerts := make([]models.AlertEvent, 0, len(alerts))
+	for _, alert := range alerts {
+		if _, ok := childIDs[alert.ChildID]; ok {
+			filteredAlerts = append(filteredAlerts, alert)
+		}
+	}
+
+	recentActivity := make([]models.DashboardActivity, 0, 10)
+	for i := len(searches) - 1; i >= 0 && len(recentActivity) < 10; i-- {
+		search := searches[i]
+		if _, ok := childIDs[search.ChildID]; !ok {
+			continue
+		}
+		recentActivity = append(recentActivity, models.DashboardActivity{
+			ID:        search.ID,
+			ChildID:   search.ChildID,
+			ChildName: childIDs[search.ChildID],
+			Query:     search.Query,
+			Engine:    search.Engine,
+			Timestamp: search.Timestamp,
+		})
+	}
+
+	summary := models.DashboardSummary{
+		TotalChildren:  len(children),
+		PairedDevices:  paired,
+		PendingPairing: pending,
+		AlertsCount:    len(filteredAlerts),
+		RecentActivity: recentActivity,
+		Alerts:         filteredAlerts,
+	}
+	_ = json.NewEncoder(w).Encode(summary)
+}
+
 func (h *Handler) handleListParentChildren(w http.ResponseWriter, r *http.Request) {
 	parentID, err := h.parentIDFromToken(r)
 	if err != nil {
@@ -229,6 +359,122 @@ func (h *Handler) handleListParentChildren(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	_ = json.NewEncoder(w).Encode(h.repos.ChildRepository().ListChildrenByParent(parentID))
+}
+
+func parsePagination(r *http.Request) (int, int) {
+	page := 1
+	limit := 20
+
+	if v := strings.TrimSpace(r.URL.Query().Get("page")); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			page = parsed
+		}
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("limit")); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			if parsed > 100 {
+				parsed = 100
+			}
+			limit = parsed
+		}
+	}
+	return page, limit
+}
+
+func (h *Handler) handleListParentAlerts(w http.ResponseWriter, r *http.Request) {
+	parentID, err := h.parentIDFromToken(r)
+	if err != nil {
+		h.writeAuthError(w, err)
+		return
+	}
+	children := h.repos.ChildRepository().ListChildrenByParent(parentID)
+	childIDs := make(map[string]struct{}, len(children))
+	for _, child := range children {
+		childIDs[child.ID] = struct{}{}
+	}
+	filtered := make([]models.AlertEvent, 0)
+	for _, alert := range h.repos.MonitoringRepository().ListAlerts() {
+		if _, exists := childIDs[alert.ChildID]; exists {
+			filtered = append(filtered, alert)
+		}
+	}
+
+	page, limit := parsePagination(r)
+	if r.URL.Query().Has("page") || r.URL.Query().Has("limit") {
+		total := len(filtered)
+		totalPages := 1
+		if total > 0 {
+			totalPages = (total + limit - 1) / limit
+		}
+		if page > totalPages && totalPages > 0 {
+			page = totalPages
+		}
+		start := (page - 1) * limit
+		if start > total {
+			start = total
+		}
+		end := start + limit
+		if end > total {
+			end = total
+		}
+		_ = json.NewEncoder(w).Encode(models.PaginatedAlertResponse{
+			Page:       page,
+			Limit:      limit,
+			Total:      total,
+			TotalPages: totalPages,
+			Items:      filtered[start:end],
+		})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(filtered)
+}
+
+func (h *Handler) handleListParentSearches(w http.ResponseWriter, r *http.Request) {
+	parentID, err := h.parentIDFromToken(r)
+	if err != nil {
+		h.writeAuthError(w, err)
+		return
+	}
+	children := h.repos.ChildRepository().ListChildrenByParent(parentID)
+	childIDs := make(map[string]struct{}, len(children))
+	for _, child := range children {
+		childIDs[child.ID] = struct{}{}
+	}
+	filtered := make([]models.SearchEvent, 0)
+	for _, event := range h.repos.MonitoringRepository().ListSearches() {
+		if _, exists := childIDs[event.ChildID]; exists {
+			filtered = append(filtered, event)
+		}
+	}
+
+	page, limit := parsePagination(r)
+	if r.URL.Query().Has("page") || r.URL.Query().Has("limit") {
+		total := len(filtered)
+		totalPages := 1
+		if total > 0 {
+			totalPages = (total + limit - 1) / limit
+		}
+		if page > totalPages && totalPages > 0 {
+			page = totalPages
+		}
+		start := (page - 1) * limit
+		if start > total {
+			start = total
+		}
+		end := start + limit
+		if end > total {
+			end = total
+		}
+		_ = json.NewEncoder(w).Encode(models.PaginatedSearchResponse{
+			Page:       page,
+			Limit:      limit,
+			Total:      total,
+			TotalPages: totalPages,
+			Items:      filtered[start:end],
+		})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(filtered)
 }
 
 func (h *Handler) handleDeleteParentChildren(w http.ResponseWriter, r *http.Request) {
@@ -266,7 +512,7 @@ func (h *Handler) handleCreateChild(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		Name     string `json:"name"`
 		Age      int    `json:"age"`
-		DeviceID string `json:"device_id"`
+		DeviceID string `json:"device_id,omitempty"`
 		AppName  string `json:"app_name"`
 		Platform string `json:"platform"`
 	}
@@ -278,6 +524,71 @@ func (h *Handler) handleCreateChild(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		status := http.StatusBadRequest
 		if err.Error() == "parent not found" || err.Error() == "device_id already registered" {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(child)
+}
+
+func (h *Handler) handleCreatePairingInvite(w http.ResponseWriter, r *http.Request) {
+	parentID, err := h.parentIDFromToken(r)
+	if err != nil {
+		h.writeAuthError(w, err)
+		return
+	}
+	childID := path.Base(strings.TrimSuffix(r.URL.Path, "/pairing-invites"))
+	if childID == "" || childID == "." || childID == "/" {
+		http.Error(w, "child id is required", http.StatusBadRequest)
+		return
+	}
+
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		http.Error(w, "unable to create pairing invite", http.StatusInternalServerError)
+		return
+	}
+	code := base64.RawURLEncoding.EncodeToString(secret)
+	hash := sha256.Sum256([]byte(code))
+	expiresAt := time.Now().UTC().Add(15 * time.Minute)
+	if err := h.repos.PairingRepository().CreatePairingInvite(parentID, childID, hex.EncodeToString(hash[:]), expiresAt); err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "child not found" {
+			status = http.StatusNotFound
+		} else if err.Error() == "child already has a paired device" {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"code":       code,
+		"expires_at": expiresAt.Format(time.RFC3339),
+	})
+}
+
+func (h *Handler) handleRedeemPairingInvite(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		Code     string `json:"code"`
+		DeviceID string `json:"device_id"`
+		Platform string `json:"platform"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(payload.Code) == "" || strings.TrimSpace(payload.DeviceID) == "" {
+		http.Error(w, "code and device_id are required", http.StatusBadRequest)
+		return
+	}
+	hash := sha256.Sum256([]byte(strings.TrimSpace(payload.Code)))
+	child, err := h.repos.PairingRepository().RedeemPairingInvite(hex.EncodeToString(hash[:]), payload.DeviceID, payload.Platform)
+	if err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "device_id already registered" || err.Error() == "child already has a paired device" {
 			status = http.StatusConflict
 		}
 		http.Error(w, err.Error(), status)

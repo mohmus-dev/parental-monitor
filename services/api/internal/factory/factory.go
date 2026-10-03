@@ -2,6 +2,8 @@ package factory
 
 import (
 	"context"
+	"time"
+
 	"parental-monitor-cli/services/api/internal/models"
 	"parental-monitor-cli/services/api/internal/storage"
 )
@@ -24,22 +26,40 @@ type ChildRepository interface {
 	DeleteChildren(parentID string, childIDs []string) error
 }
 
+type PairingRepository interface {
+	CreatePairingInvite(parentID, childID, tokenHash string, expiresAt time.Time) error
+	RedeemPairingInvite(tokenHash, deviceID, platform string) (models.Child, error)
+}
+
+type MonitoringRepository interface {
+	SaveSearch(event models.SearchEvent) models.SearchEvent
+	ListSearches() []models.SearchEvent
+	SaveAlert(event models.AlertEvent) models.AlertEvent
+	ListAlerts() []models.AlertEvent
+}
+
 // RepositoryFactory creates repository implementations using a chosen storage backend.
 type RepositoryFactory interface {
 	ParentRepository() ParentRepository
 	ChildRepository() ChildRepository
+	PairingRepository() PairingRepository
+	MonitoringRepository() MonitoringRepository
 }
 
 // MemoryFactory keeps the current in-memory store but exposes the repository interfaces.
 type MemoryFactory struct {
-	parentRepo ParentRepository
-	childRepo  ChildRepository
+	parentRepo     ParentRepository
+	childRepo      ChildRepository
+	pairingRepo    PairingRepository
+	monitoringRepo MonitoringRepository
 }
 
 func NewMemoryFactory(store *storage.MemoryStore) *MemoryFactory {
 	return &MemoryFactory{
-		parentRepo: store,
-		childRepo:  store,
+		parentRepo:     store,
+		childRepo:      store,
+		pairingRepo:    store,
+		monitoringRepo: store,
 	}
 }
 
@@ -51,10 +71,20 @@ func (f *MemoryFactory) ChildRepository() ChildRepository {
 	return f.childRepo
 }
 
+func (f *MemoryFactory) PairingRepository() PairingRepository {
+	return f.pairingRepo
+}
+
+func (f *MemoryFactory) MonitoringRepository() MonitoringRepository {
+	return f.monitoringRepo
+}
+
 // FirebaseFactory is backed by Firestore and implements the same repository interfaces.
 type FirebaseFactory struct {
-	parentRepo ParentRepository
-	childRepo  ChildRepository
+	parentRepo     ParentRepository
+	childRepo      ChildRepository
+	pairingRepo    PairingRepository
+	monitoringRepo MonitoringRepository
 }
 
 func NewFirebaseFactory(ctx context.Context, projectID, credentialsPath string) (*FirebaseFactory, error) {
@@ -62,7 +92,7 @@ func NewFirebaseFactory(ctx context.Context, projectID, credentialsPath string) 
 	if err != nil {
 		return nil, err
 	}
-	return &FirebaseFactory{parentRepo: store, childRepo: store}, nil
+	return &FirebaseFactory{parentRepo: store, childRepo: store, pairingRepo: store, monitoringRepo: store}, nil
 }
 
 func (f *FirebaseFactory) ParentRepository() ParentRepository {
@@ -71,4 +101,40 @@ func (f *FirebaseFactory) ParentRepository() ParentRepository {
 
 func (f *FirebaseFactory) ChildRepository() ChildRepository {
 	return f.childRepo
+}
+
+func (f *FirebaseFactory) PairingRepository() PairingRepository {
+	return f.pairingRepo
+}
+
+func (f *FirebaseFactory) MonitoringRepository() MonitoringRepository {
+	return f.monitoringRepo
+}
+
+// HybridFactory allows identity/pairing to live in Firebase while monitoring data can be stored in Postgres.
+type HybridFactory struct {
+	parentRepo     ParentRepository
+	childRepo      ChildRepository
+	pairingRepo    PairingRepository
+	monitoringRepo MonitoringRepository
+}
+
+func NewHybridFactory(parentRepo ParentRepository, childRepo ChildRepository, pairingRepo PairingRepository, monitoringRepo MonitoringRepository) *HybridFactory {
+	return &HybridFactory{parentRepo: parentRepo, childRepo: childRepo, pairingRepo: pairingRepo, monitoringRepo: monitoringRepo}
+}
+
+func (f *HybridFactory) ParentRepository() ParentRepository {
+	return f.parentRepo
+}
+
+func (f *HybridFactory) ChildRepository() ChildRepository {
+	return f.childRepo
+}
+
+func (f *HybridFactory) PairingRepository() PairingRepository {
+	return f.pairingRepo
+}
+
+func (f *HybridFactory) MonitoringRepository() MonitoringRepository {
+	return f.monitoringRepo
 }

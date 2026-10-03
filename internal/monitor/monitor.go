@@ -7,6 +7,8 @@ import (
 )
 
 type SearchEvent struct {
+	ChildID     string    `json:"child_id,omitempty"`
+	DeviceID    string    `json:"device_id,omitempty"`
 	Query       string    `json:"query"`
 	Engine      string    `json:"engine"`
 	Timestamp   time.Time `json:"timestamp"`
@@ -17,6 +19,8 @@ type SearchEvent struct {
 }
 
 type AlertEvent struct {
+	ChildID   string    `json:"child_id,omitempty"`
+	DeviceID  string    `json:"device_id,omitempty"`
 	Category  string    `json:"category,omitempty"`
 	Keyword   string    `json:"keyword"`
 	Query     string    `json:"query"`

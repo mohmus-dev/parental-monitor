@@ -12,18 +12,18 @@ import (
 )
 
 // daemonize re-launches the program as a detached background process (Linux/macOS)
-func daemonize(configPath string) {
+func daemonize(envPath string) {
 	exe, err := os.Executable()
 	if err != nil {
 		log.Fatalf("Failed to get executable path: %v", err)
 	}
 
-	absConfig, err := filepath.Abs(configPath)
+	absEnv, err := filepath.Abs(envPath)
 	if err != nil {
-		log.Fatalf("Failed to get config path: %v", err)
+		log.Fatalf("Failed to get environment file path: %v", err)
 	}
 
-	cmd := exec.Command(exe, "-config", absConfig)
+	cmd := exec.Command(exe, "-env", absEnv)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setsid: true, // create a new session (fully detached, no controlling terminal)
 	}
